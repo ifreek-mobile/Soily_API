@@ -1,114 +1,185 @@
-# ソイリィ チャットボット（FastAPI + OpenAI Responses API）
+# Soily API
 
-野菜の妖精「ソイリィ」と一問一答で会話できる、最小構成のチャットボット API です。開発時は簡易チャット画面（index.html）を同一オリジンで配信します。
+家庭菜園アシスタント「ソイリィ」の FastAPI ベース API。
 
-## 1. 概要
+## バージョン (v1.1)
 
-- 一問一答のチャット API（履歴保存なし）
-- OpenAI Responses API（instructions + input 形式、`resp.output_text` を利用）
-- /chat は「構造化出力（Structured Outputs）」で JSON を強制
-  - 返却: `{ response: string, flag: boolean }`（最大 300 文字）
-- /trivia はプレーンテキスト（text/plain）で返却
-  - 入力の野菜リストからランダムに 1 つ選び、月情報を踏まえた短いトリビアを返す（空なら「その他」を選び全般トリビア）
-- ルート `/` は `templates/index.html` を返却（ローカル確認用）
-- API ドキュメントは `/docs`（Swagger UI）
+- /trivia 仕様を「野菜リスト入力」→「緯度/経度 + 方角 + 設置場所」入力へ刷新
+- 緯度経度から都市名と当日の天気を `web_search_preview` で取得（失敗時フォールバック）
+- 20 文字以内ワンフレーズ強制（リトライ + バックオフ）
+- セマフォで同時実行制御 + タイムアウト + 軽量リトライ導入
 
-## 2. ディレクトリ構成
+## エンドポイント概要
+
+| メソッド | パス    | 説明                                         |
+| -------- | ------- | -------------------------------------------- |
+| POST     | /chat   | 一問一答チャット（構造化 JSON 出力）         |
+| POST     | /trivia | 地域・天気・月を加味した 20 文字以内トリビア |
+| GET      | /       | 簡易フロント (開発用)                        |
+| GET      | /docs   | OpenAPI (Swagger UI)                         |
+
+## /chat
+
+Request (JSON):
+
+```json
+{ "message": "トマトの脇芽かきは？" }
+```
+
+Validation: 1〜1000 文字  
+Response (JSON):
+
+```json
+{ "response": "～な感じだよ", "flag": false }
+```
+
+内部: OpenAI Responses API + JSON Schema (Structured Outputs) で強制。
+
+## /trivia
+
+Request (JSON):
+
+```json
+{
+  "latitude": "35.6895",
+  "longitude": "139.6917",
+  "direction": "南向き",
+  "location": "ベランダ"
+}
+```
+
+Validation:
+
+- latitude: 数値文字列, -90 ～ 90
+- longitude: 数値文字列, -180 ～ 180
+- direction: 1 ～ 20 文字
+- location: "ベランダ" / "庭"
+  処理フロー:
+
+1. 緯度経度 → 都市 / 天気 (web_search_preview, JSON Schema 指定, タイムアウト)
+2. 月 (サーバローカル) 取得
+3. 上記情報を instructions + payload に埋め込み生成
+4. 20 文字以内でなければ最大 `TRIVIA_MAX_ATTEMPTS` リトライ（バックオフ 0.2s, 0.4s...）
+5. なお超過最終結果は切り詰め（ログ警告）
+   Response (JSON / Pydantic):
+
+```json
+{ "response": "東京は○○だよ" }
+```
+
+必ず 20 文字以内（切り詰め後を含む）。
+
+## エラーポリシー
+
+| ステータス | 意味                                            |
+| ---------- | ----------------------------------------------- |
+| 400 / 422  | バリデーション失敗（FastAPI 既定は 422）        |
+| 429        | 同時実行枠取得不可 (2 秒待ちタイムアウト)       |
+| 500        | 予期せぬ内部エラー / 上流失敗で最終的に応答無し |
+
+タイムアウト / 一時的ネットワーク例外はリトライ（上限到達後は 500）。
+
+## 同時実行と耐性
+
+- asyncio.Semaphore で `/chat` `/trivia` それぞれ並列制限
+- finally で必ず release（リーク防止）
+- OpenAI 呼び出し: 個別タイムアウト + 軽量リトライ
+- web_search_preview: 1 回のみ（生成ループ外）→ 失敗時は city/weather 空で続行
+
+## 文字数制約 (/trivia)
+
+- 20 文字以下判定はサーバ側で毎試行
+- 成功条件満たすまでリトライ
+- 最終的に超過ならログ警告し先頭 20 文字へ切り詰め
+
+## ディレクトリ構成
 
 ```
 project_root/
 ├─ app/
-│  ├─ main.py               # FastAPI エントリ（CORS/ルータ登録/トップページ）
-│  ├─ models.py             # Pydantic モデル（Chat/Trivia の入出力）
+│  ├─ main.py
+│  ├─ models.py            # ChatRequest / ChatResponse / TriviaRequest / TriviaResponse
 │  ├─ routers/
-│  │  ├─ chat.py            # POST /chat（JSON構造化出力）
-│  │  └─ trivia.py          # POST /trivia（text/plain 返却）
+│  │  ├─ chat.py
+│  │  └─ trivia.py
 │  ├─ services/
-│  │  └─ openai_client.py   # 共有 AsyncOpenAI クライアント（dotenv読込 + api_key 指定）
-│  ├─ prompts/
-│  │  └─ soylly.py          # ソイリィの命令書（プロンプト）
+│  │  └─ openai_client.py
 │  └─ templates/
-│     └─ index.html         # 簡易フロント（同一オリジンで動作）
-├─ data/
-│  └─ history.csv           # 参考（未使用の場合あり）
+│     └─ index.html
+├─ web_search_test.py      # 天気取得テストスクリプト
 ├─ requirements.txt
 ├─ README.md
-└─ .env                      # 開発時だけ配置（OPENAI_API_KEY を設定）
+└─ .env (開発のみ配置)
 ```
 
-## 3. セットアップ
+## 環境変数
 
-前提:
+| 変数                   | デフォルト | 用途                             |
+| ---------------------- | ---------- | -------------------------------- |
+| OPENAI_API_KEY         | (必須)     | OpenAI API キー                  |
+| CHAT_CONCURRENCY       | 10         | /chat 同時実行上限               |
+| TRIVIA_CONCURRENCY     | 10         | /trivia 同時実行上限             |
+| CHAT_OPENAI_TIMEOUT    | 8.0        | /chat 1 リクエストタイムアウト秒 |
+| TRIVIA_OPENAI_TIMEOUT  | 8.0        | /trivia 生成 1 回タイムアウト    |
+| TRIVIA_WEATHER_TIMEOUT | 10.0       | 天気取得タイムアウト             |
+| CHAT_MAX_ATTEMPTS      | 2          | /chat リトライ上限               |
+| TRIVIA_MAX_ATTEMPTS    | 5          | 20 文字達成までの上限            |
 
-- Python 3.10 以上
-- OpenAI API キー
-
-手順:
+## セットアップ
 
 ```bash
-# 仮想環境の作成と有効化（macOS/Linux）
 python3 -m venv venv
 source venv/bin/activate
-
-# 依存インストール
 pip install -r requirements.txt
-
-# .env を作成し API キーを設定（開発時）
-cat > .env << 'EOF'
+cat > .env <<'EOF'
 OPENAI_API_KEY="sk-xxxxxxxxxxxxxxxxxxxxxxxx"
 EOF
-```
-
-## 4. 起動と確認
-
-起動:
-
-```bash
 uvicorn app.main:app --reload
 ```
 
-アクセス:
+アクセス: http://127.0.0.1:8000/ /docs
 
-- チャット UI: http://127.0.0.1:8000/
-- API 仕様: http://127.0.0.1:8000/docs
-
-curl 例:
+## 動作確認例
 
 ```bash
-# /chat（JSON構造化出力）
 curl -s -X POST http://127.0.0.1:8000/chat \
   -H "Content-Type: application/json" \
-  -d '{"message":"トマトの脇芽かきのコツは？"}'
-# => {"response":"...","flag":false}
+  -d '{"message":"土の水はけ改善法は？"}'
 
-# /trivia（配列ボディ or {"vegetables":[...]} の両方対応）
 curl -s -X POST http://127.0.0.1:8000/trivia \
   -H "Content-Type: application/json" \
-  -d '["はつかだいこん","小松菜","ラディッシュ"]'
-# => プレーンテキストが返る（例: "今月は...だよ！"）
+  -d '{"latitude":"35.6895","longitude":"139.6917","direction":"南向き","location":"ベランダ"}'
 ```
 
-## 5. API 仕様（要点）
+## 今後の拡張候補
 
-- POST /chat
-  - Request: `{ "message": "<ユーザーの質問>" }`
-  - Response(JSON):
-    - `response` (string, <=300): ソイリィ口調の回答
-    - `flag` (boolean): 個人情報を検出したら true
-- POST /trivia
-  - Request(JSON): `['トマト','きゅうり']` または `{ "vegetables": ["トマト", "きゅうり"] }`
-  - Response(text/plain): 短いトリビア 1〜2 文（ソイリィ口調）。入力が空でも「その他」扱いで返す。
-- GET /
-  - `templates/index.html` を返却（ローカル確認用）。本番で別フロントから呼び出す場合は不要。
-- GET /docs
-  - Swagger UI（必要に応じて本番では無効化可）
+### ファインチューニング (SFT: Supervised Fine-Tuning) 計画
 
-## 6. トラブルシューティング
+目的
 
-- OpenAI の API キー関連エラー
-  - 例: `openai.OpenAIError: The api_key client option must be set ...`
-  - 対応: `.env` に `OPENAI_API_KEY` を設定し、サーバを再起動。プロダクションは環境変数で注入。
-- VS Code で `import "dotenv" を解決できません` と出る
-  - 対応: VS Code の Python インタープリタを venv に切替、`pip install -r requirements.txt` 済みか確認。
-- CORS/OPTIONS のエラー
-  - 開発は `allow_origins=["*"]`。本番はフロントのドメインに限定してください。
+- ソイリィ固有表現（口調 / 20 文字内要約適合 / ドメイン知識）を向上
+- 応答の一貫性と PII (個人情報) フィルタ性能の改善
+
+データ要件
+
+- JSONL 形式、最低 20 サンプル（推奨は数百以上で漸進）
+- 1 行 = 1 会話タスク
+- 各行フォーマット:
+
+```
+{"messages":[
+  {"role":"user","context":"ユーザー質問テキスト"},
+  {"role":"assistant","content":"理想的な回答（ソイリィ口調・制約順守）"}
+]}
+```
+
+注意: user 側は key を content ではなく context として管理（内部前処理で content に rename 可能）。一貫性確保のため社内スキーマで固定。
+
+JSONL サンプル (抜粋):
+
+```
+{"messages":[{"role":"user","context":"プランターの土が固い 改善法は？"},{"role":"assistant","content":"腐葉土とパーライト混ぜてふかふかにしよう！"}]}
+{"messages":[{"role":"user","context":"夏レタスの徒長を抑えるには？"},{"role":"assistant","content":"早朝だけ直射、日中は遮光ネットで徒長抑制だよ"}]}
+{"messages":[{"role":"user","context":"ミニトマトの脇芽かき頻度？"},{"role":"assistant","content":"週1で主茎基部から5cm以内をこまめに摘むと養分集中だね"}]}
+...
+```
