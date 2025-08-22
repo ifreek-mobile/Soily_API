@@ -1,0 +1,397 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>チャットボット with ソイリィ</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            background-color: #f0f2f5;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            margin: 0;
+        }
+        .chat-container {
+            width: 100%;
+            max-width: 500px;
+            height: 80vh;
+            max-height: 700px;
+            background-color: #fff;
+            border-radius: 16px;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+        .chat-header {
+            background-color: #4CAF50;
+            color: white;
+            padding: 16px;
+            text-align: center;
+            font-size: 1.2em;
+            font-weight: bold;
+            border-bottom: 1px solid #ddd;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .header-buttons {
+            display: flex;
+            gap: 8px;
+        }
+        .header-btn {
+            background-color: #fff;
+            color: #4CAF50;
+            padding: 6px 12px;
+            border-radius: 15px;
+            border: 1px solid #4CAF50;
+            cursor: pointer;
+            font-size: 0.8em;
+            font-weight: normal;
+            transition: background-color 0.3s, color 0.3s;
+        }
+        .header-btn:hover {
+            background-color: #e8f5e9;
+        }
+        .chat-box {
+            flex-grow: 1;
+            padding: 20px;
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+        }
+        .message {
+            display: flex;
+            align-items: flex-end;
+            gap: 10px;
+            max-width: 80%;
+        }
+        .user-message {
+            align-self: flex-end;
+            flex-direction: row-reverse;
+        }
+        .bot-message {
+            align-self: flex-start;
+        }
+        .avatar {
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            background-color: #ddd;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            font-size: 20px;
+        }
+        .bot-avatar {
+            background-color: #a5d6a7;
+        }
+        .user-avatar {
+            background-color: #90caf9;
+        }
+        .message-bubble {
+            padding: 12px 16px;
+            border-radius: 18px;
+            color: #333;
+            white-space: pre-wrap; /* 改行を反映させる */
+        }
+        .user-message .message-bubble {
+            background-color: #e3f2fd;
+            border-top-right-radius: 4px;
+        }
+        .bot-message .message-bubble {
+            background-color: #e8f5e9;
+            border-top-left-radius: 4px;
+        }
+        .chat-input {
+            display: flex;
+            padding: 15px;
+            border-top: 1px solid #ddd;
+            background-color: #f9f9f9;
+        }
+        #message-input {
+            flex-grow: 1;
+            padding: 12px;
+            border: 1px solid #ccc;
+            border-radius: 20px;
+            margin-right: 10px;
+            font-size: 1em;
+        }
+        #send-button {
+            padding: 12px 20px;
+            border: none;
+            background-color: #4CAF50;
+            color: white;
+            border-radius: 20px;
+            cursor: pointer;
+            font-size: 1em;
+            transition: background-color 0.3s;
+        }
+        #send-button:hover {
+            background-color: #45a049;
+        }
+        #send-button:disabled {
+            background-color: #a5d6a7;
+            cursor: not-allowed;
+        }
+        .typing-indicator {
+            display: none;
+            align-items: center;
+            gap: 5px;
+            padding: 10px 20px;
+        }
+        .typing-indicator .avatar {
+             width: 30px;
+             height: 30px;
+             font-size: 16px;
+        }
+        .typing-indicator .dots span {
+            width: 8px;
+            height: 8px;
+            background-color: #aaa;
+            border-radius: 50%;
+            display: inline-block;
+            margin: 0 2px;
+            animation: typing 1.4s infinite both;
+        }
+        .typing-indicator .dots span:nth-child(2) {
+            animation-delay: 0.2s;
+        }
+        .typing-indicator .dots span:nth-child(3) {
+            animation-delay: 0.4s;
+        }
+        @keyframes typing {
+            0% { opacity: 0.2; }
+            20% { opacity: 1; }
+            100% { opacity: 0.2; }
+        }
+        .json-panel {
+            display: none;
+            margin: 0 16px 8px 16px;
+            padding: 10px;
+            background: #f7f7f7;
+            border: 1px solid #e0e0e0;
+            border-radius: 8px;
+            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+            font-size: 12px;
+            max-height: 140px;
+            overflow: auto;
+            white-space: pre-wrap;
+        }
+    </style>
+</head>
+<body>
+
+<div class="chat-container">
+    <div class="chat-header">
+        <span>ソイリィとおはなし</span>
+        <div class="header-buttons">
+            <button id="docs-button" class="header-btn">API仕様書</button>
+            <button id="trivia-button" class="header-btn" title="野菜トリビア">🥕</button>
+            <button id="json-button" class="header-btn">JSON</button>
+        </div>
+    </div>
+    <div class="chat-box" id="chat-box">
+        <div class="message bot-message">
+            <div class="avatar bot-avatar">🥕</div>
+            <div class="message-bubble">やあ！ぼくは野菜の妖精ソイリィだよ。なんでも聞いてね！</div>
+        </div>
+    </div>
+    <div class="typing-indicator" id="typing-indicator">
+        <div class="avatar bot-avatar">🥕</div>
+        <div class="dots">
+            <span></span><span></span><span></span>
+        </div>
+    </div>
+    <pre id="json-panel" class="json-panel"></pre>
+    <div class="chat-input">
+        <input type="text" id="message-input" placeholder="メッセージを入力..." autocomplete="off">
+        <button id="send-button">送信</button>
+    </div>
+</div>
+
+<script>
+    const chatBox = document.getElementById('chat-box');
+    const messageInput = document.getElementById('message-input');
+    const sendButton = document.getElementById('send-button');
+    const typingIndicator = document.getElementById('typing-indicator');
+    const docsButton = document.getElementById('docs-button');
+    const jsonButton = document.getElementById('json-button');
+    const jsonPanel = document.getElementById('json-panel');
+    const triviaButton = document.getElementById('trivia-button');
+
+    // 起動方法に依存せずAPI URLを決定
+    const isFile = window.location.protocol === 'file:';
+    const API_BASE = isFile ? 'http://127.0.0.1:8000' : window.location.origin;
+    const CHAT_API_URL = API_BASE + '/chat';
+    const TRIVIA_API_URL = API_BASE + '/trivia';
+    const DOCS_URL = API_BASE + '/docs';
+
+    // /trivia 用のリクエストプリセット（5パターン）
+    const TRIVIA_PRESETS = [
+        { latitude: "35.6895", longitude: "139.6917", direction: "南向き", location: "ベランダ" }, // 東京
+        { latitude: "34.6937", longitude: "135.5023", direction: "東向き", location: "庭" },     // 大阪
+        { latitude: "43.0621", longitude: "141.3544", direction: "西向き", location: "ベランダ" }, // 札幌
+        { latitude: "33.5902", longitude: "130.4017", direction: "北向き", location: "庭" },     // 福岡
+        { latitude: "26.2124", longitude: "127.6809", direction: "南向き", location: "ベランダ" }, // 那覇
+    ];
+    const pickRandom = (arr) => arr[Math.floor(Math.random() * arr.length)];
+
+    console.log('[INIT] API_BASE =', API_BASE);
+
+    sendButton.addEventListener('click', sendMessage);
+    docsButton.addEventListener('click', () => {
+        window.open(DOCS_URL, '_blank');
+    });
+    jsonButton.addEventListener('click', () => {
+        const show = jsonPanel.style.display !== 'block';
+        jsonPanel.style.display = show ? 'block' : 'none';
+        jsonButton.textContent = show ? 'JSON非表示' : 'JSON';
+    });
+    triviaButton.addEventListener('click', requestTrivia);
+
+    messageInput.addEventListener('keypress', function(e) {
+        if (e.key === 'Enter' && !e.shiftKey) {
+            e.preventDefault();
+            sendMessage();
+        }
+    });
+
+    function addMessage(sender, text) {
+        const messageElement = document.createElement('div');
+        messageElement.classList.add('message', sender === 'user' ? 'user-message' : 'bot-message');
+
+        const avatar = document.createElement('div');
+        avatar.classList.add('avatar', sender === 'user' ? 'user-avatar' : 'bot-avatar');
+        avatar.textContent = sender === 'user' ? '🧑' : '🥕';
+
+        const bubble = document.createElement('div');
+        bubble.classList.add('message-bubble');
+        bubble.textContent = text;
+
+        messageElement.appendChild(avatar);
+        messageElement.appendChild(bubble);
+        chatBox.appendChild(messageElement);
+        chatBox.scrollTop = chatBox.scrollHeight;
+    }
+
+    async function sendMessage() {
+        const messageText = messageInput.value.trim();
+        if (messageText === '') return;
+
+        addMessage('user', messageText);
+        messageInput.value = '';
+        sendButton.disabled = true;
+        typingIndicator.style.display = 'flex';
+
+        try {
+            console.log('[FETCH] POST', CHAT_API_URL, { message: messageText });
+            const response = await fetch(CHAT_API_URL, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ message: messageText }),
+            });
+            console.log('[FETCH] status', response.status);
+
+            if (!response.ok) {
+                const raw = await response.text();
+                let detail = 'サーバーでエラーが発生しました。';
+                try {
+                    const asJson = JSON.parse(raw);
+                    detail = asJson.detail || detail;
+                } catch (_) {}
+                console.error('[FETCH] error body:', raw);
+                throw new Error(detail + ` (status ${response.status})`);
+            }
+
+            const data = await response.json();
+            // JSONの可視化（テスト用）
+            jsonPanel.textContent = JSON.stringify(data, null, 2);
+            console.log('[JSON]', data);
+
+            // 通常のメッセージ表示
+            addMessage('bot', data.response);
+
+            // 個人情報フラグの可視化（テスト用）：true の時だけ追記
+            if (typeof data.flag === 'boolean') {
+                if (data.flag) {
+                    addMessage('bot', '【テスト】個人情報フラグ: true');
+                } else {
+                    // flag=false はUIを汚さないため表示しない。必要なら下のコメントを外す
+                    // addMessage('bot', '【テスト】個人情報フラグ: false');
+                }
+            }
+
+        } catch (error) {
+            addMessage('bot', 'ごめんね、エラーが起きちゃったみたい。少し待ってからもう一度試してみてね。');
+            console.error('Error:', error);
+        } finally {
+            sendButton.disabled = false;
+            typingIndicator.style.display = 'none';
+            messageInput.focus();
+        }
+    }
+
+    async function requestTrivia() {
+        triviaButton.disabled = true;
+        typingIndicator.style.display = 'flex';
+        try {
+            // 送信ペイロード（5パターンからランダム選択）
+            const payload = pickRandom(TRIVIA_PRESETS);
+             console.log('[FETCH] POST', TRIVIA_API_URL, payload);
+             const response = await fetch(TRIVIA_API_URL, {
+                 method: 'POST',
+                 headers: {
+                     'Content-Type': 'application/json',
+                     'Accept': 'application/json'
+                 },
+                 body: JSON.stringify(payload),
+             });
+             console.log('[FETCH] trivia status', response.status);
+
+            if (!response.ok) {
+                const raw = await response.text();
+                let detail = 'サーバーでエラーが発生しました。';
+                try {
+                    const asJson = JSON.parse(raw);
+                    detail = asJson.detail || detail;
+                } catch (_) {}
+                console.error('[FETCH] trivia error body:', raw);
+                throw new Error(detail + ` (status ${response.status})`);
+            }
+
+            const data = await response.json(); // { response: "..." }
+            addMessage('bot', data.response);
+        } catch (error) {
+            addMessage('bot', 'ごめんね、トリビアの取得でエラーが起きちゃった。少し待ってね。');
+            console.error('Trivia Error:', error);
+        } finally {
+            typingIndicator.style.display = 'none';
+            triviaButton.disabled = false;
+        }
+    }
+
+    // 汎用呼び出し（必要なら他の箇所で再利用）
+    async function postTrivia(payload) {
+         const res = await fetch("/trivia", {
+           method: "POST",
+           headers: {
+             "Content-Type": "application/json",
+             "Accept": "application/json"
+           },
+          body: JSON.stringify(payload),
+         });
+         if (!res.ok) throw new Error(`HTTP ${res.status}`);
+         const data = await res.json();
+         return data.response; // { response: "..." }
+       }
+</script>
+
+</body>
+</html>

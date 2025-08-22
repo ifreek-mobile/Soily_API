@@ -1,0 +1,58 @@
+from fastapi import FastAPI, HTTPException, Body
+from fastapi.responses import FileResponse, PlainTextResponse
+from fastapi.middleware.cors import CORSMiddleware
+from pathlib import Path
+from app.models import ChatRequest, ChatResponse, TriviaResponse, TriviaRequest
+from app.services.openai_client import client
+from app.prompts.soylly import SOYLY_PROMPT
+from app.routers.chat import router as chat_router
+from app.routers.trivia import router as trivia_router
+import os
+from dotenv import load_dotenv
+import logging
+import json
+from typing import List, Optional, Union
+from datetime import datetime
+import random
+
+# .envファイルから環境変数を読み込む
+load_dotenv()
+
+app = FastAPI(
+    title="ソイリィChat Bot API",
+    description="野菜の妖精「ソイリィ」と会話できるAPIです。",
+    version="1.0.0"
+)
+
+# CORS: file:// や他ポートからのアクセスも許可（資格情報は使わない）
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+    allow_credentials=False,
+)
+
+# OpenAI APIクライアントは共有インスタンスを利用
+logger = logging.getLogger("uvicorn.error")
+
+# 起動時にAPIキー確認（未設定だと後続で500になりやすいため警告）
+
+
+@app.on_event("startup")
+async def _check_env():
+    if not os.getenv("OPENAI_API_KEY"):
+        logger.warning("OPENAI_API_KEY が設定されていません。チャットAPIはエラーになります。")
+
+# ルータ登録（エンドポイントは従来どおりのパス）
+app.include_router(chat_router)
+app.include_router(trivia_router)
+
+
+@app.get("/", summary="フロントページ")
+def serve_index():
+    """templates/index.html を返す（同一オリジンでCORS不要）。"""
+    index_path = Path(__file__).resolve().parent / "templates" / "index.html"
+    if not index_path.exists():
+        raise HTTPException(status_code=404, detail="index.html が見つかりません")
+    return FileResponse(index_path, media_type="text/html")
