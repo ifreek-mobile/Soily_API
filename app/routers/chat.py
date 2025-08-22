@@ -18,6 +18,8 @@ CHAT_CONCURRENCY = int(os.getenv("CHAT_CONCURRENCY", "15"))
 _CHAT_SEMAPHORE = asyncio.Semaphore(CHAT_CONCURRENCY)
 CHAT_OPENAI_TIMEOUT = float(os.getenv("CHAT_OPENAI_TIMEOUT", "8.0"))
 CHAT_MAX_ATTEMPTS = int(os.getenv("CHAT_MAX_ATTEMPTS", "2"))
+# 一時的障害とみなして再試行対象にするステータスコード
+RETRY_STATUS_CODES = {429, 500, 502, 503, 504}
 
 @router.post("/chat", response_model=ChatResponse, summary="チャット応答", description="ユーザーからのメッセージを受け取り、AI（ソイリィ）が応答を返します。")
 async def chat(request: ChatRequest = Body(..., description="ユーザーからのメッセージ")):
@@ -60,20 +62,35 @@ async def chat(request: ChatRequest = Body(..., description="ユーザーから�
                         timeout=CHAT_OPENAI_TIMEOUT,
                     )
                 except asyncio.TimeoutError:
-                    # タイムアウトはWARN記録して次試行へ（スロットリングや瞬間的混雑を想定）
-                    logger.warning("/chat OpenAI 呼び出しがタイムアウト（attempt=%d）", attempt + 1)
-                    # 短い待機で瞬間負荷を緩和
+                    logger.warning("/chat OpenAI タイムアウト attempt=%d", attempt + 1)
                     await asyncio.sleep(min(0.2 * (attempt + 1), 1.0))
                     continue
-                # SDKから応答文字列を取り出し。空なら次の試行へ。
+                except Exception as e:
+                    # OpenAI SDK / HTTP系例外から status_code を抽出（存在しない場合は None）
+                    status = getattr(e, "status_code", None)
+                    if status is None:
+                        status = getattr(getattr(e, "response", None), "status_code", None)
+                    if status in RETRY_STATUS_CODES:
+                        # 残り試行があればバックオフして再試行
+                        if attempt + 1 < CHAT_MAX_ATTEMPTS:
+                            logger.warning("/chat OpenAI 一時エラー status=%s attempt=%d: %r", status, attempt + 1, e)
+                            await asyncio.sleep(min(0.3 * (attempt + 1), 1.2))
+                            continue
+                        # 試行枯渇：429はそのまま、その他は503で利用不可を明示
+                        if status == 429:
+                            raise HTTPException(status_code=429, detail="リクエストが集中しています。少し待って再度お試しください。")
+                        raise HTTPException(status_code=503, detail="外部サービスが混雑しています。時間をおいて再度お試しください。")
+                    # 再試行対象外は従来通り想定外扱い
+                    raise
+                # 応答テキスト抽出
                 ai_response = (getattr(resp, "output_text", None) or "").strip()
                 if ai_response:
                     break
                 await asyncio.sleep(min(0.2 * (attempt + 1), 1.0))
 
-            # すべての試行で応答が空ならサーバ側エラーとして扱う
+            # 全試行で空応答 → 一時的利用不能扱い
             if not ai_response:
-                raise RuntimeError("AIからの応答が空でした")
+                raise HTTPException(status_code=503, detail="外部サービスが混雑しています。時間をおいて再度お試しください。")
         finally:
             # 例外の有無に関わらず必ず解放（リーク防止）
             _CHAT_SEMAPHORE.release()
@@ -95,6 +112,12 @@ async def chat(request: ChatRequest = Body(..., description="ユーザーから�
         flag_value = parsed.get("flag")
         if not isinstance(response_text, str) or not isinstance(flag_value, bool):
             raise HTTPException(status_code=502, detail="AI応答の型エラー")
+
+        # 最終ガード：300文字上限（仕様厳守）。逸脱時は警告ログ＋安全に切り詰め。
+        response_text = response_text.strip()
+        if len(response_text) > 300:
+            logger.warning("AI応答300文字超過のため切り詰め head=%r", response_text[:60])
+            response_text = response_text[:300]
 
         # Pydantic による最終バリデーション（response_model）
         return ChatResponse(response=response_text, flag=flag_value)

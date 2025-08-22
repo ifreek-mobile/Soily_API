@@ -92,7 +92,9 @@ async def trivia(req: TriviaRequest = Body(..., description='{"latitude":"...", 
                 data = _safe_json(raw)
                 city = str(data.get("city", "")).strip()
                 weather = str(data.get("weather", "")).strip()
-                print(f"都市: {city}, 天気: {data.get('weather', '')}")
+                # print ではなくログ（DEBUG）に統一
+                logger.debug("Weather resolved city=%s weather=%s raw_head=%r",
+                             city, weather, raw[:60])
             except Exception as we:
                 logger.warning("天気取得に失敗（フォールバック）: %r", we)
                 # city/weather は空のまま進める
@@ -105,9 +107,9 @@ async def trivia(req: TriviaRequest = Body(..., description='{"latitude":"...", 
                 "敬語は使わない。"
                 "語尾は『〜だよ』『〜だね』『〜なんだ』『〜かな？』『〜しよう！』『！』などを用いる。"
                 "絵文字は使わない。必ず日本語で回答する。"
-                "緯度経度から場所を特定しその情報を加味して回答をすること"
-                f"ユーザーは**{req.direction}**の**{req.location}**で野菜を栽培している情報も加味すること"
-                "嘘の情報は含めないこと"
+                "緯度経度から場所を特定しその情報を加味して回答をすること。"
+                f"ユーザーは**{req.direction}**の**{req.location}**で野菜を栽培している情報も加味すること。"
+                "嘘の情報は含めないこと。"
             )
 
             # モデルへ渡す補助情報（天気情報を追加）
@@ -117,7 +119,7 @@ async def trivia(req: TriviaRequest = Body(..., description='{"latitude":"...", 
                 "weather": weather,
                 "direction": req.direction,
                 "location": req.location,
-                "note": "短く簡潔に。読みやすく違和感のない一文**20文字以下に必ず**まとめる。回答には都市名か方角か天気か旬の情報のいずれかの情報は必ず含めつつ**自然な形**で回答すること",
+                "note": "短く簡潔に。読みやすく違和感のない一文**20文字以下に必ず**まとめる。回答には都市名か方角か天気か旬の情報のいずれかの情報は必ず含めつつ**自然な形**で回答すること。",
             }
             # 生成ループ：OpenAI呼び出しにタイムアウトを付け、20文字以下なら採用。
             # 超過時は軽いバックオフ(0.2, 0.4, ... 最大1.0秒)を挟み、最大 MAX_ATTEMPTS 回まで試行。
@@ -148,12 +150,12 @@ async def trivia(req: TriviaRequest = Body(..., description='{"latitude":"...", 
                 # 短いバックオフで外部APIの瞬間負荷を緩和
                 await asyncio.sleep(min(0.2 * (attempt + 1), 1.0))
 
-            # ガード：応答が空なら 500（上位で HTTPException に変換）
+            # ガード：応答が空なら 503（一時的利用不能）
             if not ai_text:
-                raise RuntimeError("AIからの応答が空でした")
-            # 最終ガード：まだ20文字超ならログを残し、先頭20文字に切り詰めて返却
+                raise HTTPException(status_code=503, detail="外部サービスが混雑しています。時間をおいて再度お試しください。")
+            # 最終ガード：まだ20文字超なら切り詰め（ログは先頭60文字のみ）
             if len(ai_text) > 20:
-                logger.warning("20文字制約未達のため切り詰めを実施: %s", ai_text)
+                logger.warning("20文字制約未達のため切り詰め実施 head=%r", ai_text[:60])
                 ai_text = ai_text[:20].strip()
 
             return TriviaResponse(response=ai_text)

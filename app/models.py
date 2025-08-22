@@ -13,10 +13,7 @@ class ChatResponse(BaseModel):
     flag: bool = Field(..., description="個人情報が含まれているかどうか / ある場合はTrue、ない場合はFalse")
 
 
-# /trivia のリクエスト（新要件）
-# すべて必須の文字列として受け取り、前後空白を除去。
-# 緯度/経度は数値に変換できること・範囲（緯度: -90〜90、経度: -180〜180）を検証。
-# location は「ベランダ」「庭」のいずれかのみ許可。
+# /trivia のリクエスト
 class TriviaRequest(BaseModel):
     latitude: StrictStr = Field(..., description="緯度（文字列だが数値に変換可能であること。範囲: -90〜90）")
     longitude: StrictStr = Field(..., description="経度（文字列だが数値に変換可能であること。範囲: -180〜180）")

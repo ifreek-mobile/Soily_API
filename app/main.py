@@ -1,27 +1,32 @@
-from fastapi import FastAPI, HTTPException, Body
-from fastapi.responses import FileResponse, PlainTextResponse
+from fastapi import FastAPI, HTTPException
+from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pathlib import Path
-from app.models import ChatRequest, ChatResponse, TriviaResponse, TriviaRequest
-from app.services.openai_client import client
-from app.prompts.soylly import SOYLY_PROMPT
 from app.routers.chat import router as chat_router
 from app.routers.trivia import router as trivia_router
 import os
 from dotenv import load_dotenv
 import logging
-import json
-from typing import List, Optional, Union
-from datetime import datetime
-import random
+from contextlib import asynccontextmanager  # 追加
 
 # .envファイルから環境変数を読み込む
 load_dotenv()
 
+logger = logging.getLogger("uvicorn.error")  # 位置を前へ（lifespan 内で利用）
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # startup 相当
+    if not os.getenv("OPENAI_API_KEY"):
+        logger.warning("OPENAI_API_KEY が設定されていません。チャットAPIはエラーになります。")
+    yield
+    # shutdown 相当（現状なし。必要ならここに後処理）
+
 app = FastAPI(
     title="ソイリィChat Bot API",
     description="野菜の妖精「ソイリィ」と会話できるAPIです。",
-    version="1.0.0"
+    version="1.0.0",
+    lifespan=lifespan,  # 追加
 )
 
 # CORS: file:// や他ポートからのアクセスも許可（資格情報は使わない）
@@ -33,21 +38,8 @@ app.add_middleware(
     allow_credentials=False,
 )
 
-# OpenAI APIクライアントは共有インスタンスを利用
-logger = logging.getLogger("uvicorn.error")
-
-# 起動時にAPIキー確認（未設定だと後続で500になりやすいため警告）
-
-
-@app.on_event("startup")
-async def _check_env():
-    if not os.getenv("OPENAI_API_KEY"):
-        logger.warning("OPENAI_API_KEY が設定されていません。チャットAPIはエラーになります。")
-
-# ルータ登録（エンドポイントは従来どおりのパス）
 app.include_router(chat_router)
 app.include_router(trivia_router)
-
 
 @app.get("/", summary="フロントページ")
 def serve_index():

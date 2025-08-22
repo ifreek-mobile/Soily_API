@@ -2,42 +2,63 @@
 
 家庭菜園アシスタント「ソイリィ」の FastAPI ベース API。
 
-## バージョン (v1.1)
+## バージョン (v1.0)
 
-- /trivia 仕様を「野菜リスト入力」→「緯度/経度 + 方角 + 設置場所」入力へ刷新
-- 緯度経度から都市名と当日の天気を `web_search_preview` で取得（失敗時フォールバック）
-- 20 文字以内ワンフレーズ強制（リトライ + バックオフ）
-- セマフォで同時実行制御 + タイムアウト + 軽量リトライ導入
+- /chat: 一時的外部エラーを 503 / 429 と区別（従来は 500 集約）
+- /trivia: 緯度/経度 + 方角 + 設置場所 + 当日天気 (web_search_preview) を活用
+- /trivia 応答: 20 文字以内（超過時トリム）リトライ + バックオフ
+- OpenAI 呼び出し: タイムアウト + セマフォ + 軽量リトライ
+- PII(個人情報) フラグ検出: プロンプト内ルール + サーバ側 JSON 構造検証
 
 ## エンドポイント概要
 
-| メソッド | パス    | 説明                                         |
-| -------- | ------- | -------------------------------------------- |
-| POST     | /chat   | 一問一答チャット（構造化 JSON 出力）         |
-| POST     | /trivia | 地域・天気・月を加味した 20 文字以内トリビア |
-| GET      | /       | 簡易フロント (開発用)                        |
-| GET      | /docs   | OpenAPI (Swagger UI)                         |
+| メソッド | パス    | 説明                                 |
+| -------- | ------- | ------------------------------------ |
+| POST     | /chat   | 一問一答チャット（JSON 構造出力）    |
+| POST     | /trivia | 地域・天気・月を加味した短文トリビア |
+| GET      | /       | 簡易フロント (開発用)                |
+| GET      | /docs   | OpenAPI (Swagger UI)                 |
+
+---
 
 ## /chat
 
-Request (JSON):
+Request:
 
 ```json
 { "message": "トマトの脇芽かきは？" }
 ```
 
-Validation: 1〜1000 文字  
-Response (JSON):
+Validation:
+
+- 1〜1000 文字 (Pydantic: ChatRequest)
+
+Response:
 
 ```json
-{ "response": "～な感じだよ", "flag": false }
+{ "response": "～だよ", "flag": false }
 ```
 
-内部: OpenAI Responses API + JSON Schema (Structured Outputs) で強制。
+フィールド:
+
+- response: ソイリィ口調で最大 300 文字（超過時サーバ側で切り詰め）
+- flag: 個人情報（氏名、住所（市区町村以下の番地等）、電話番号、メールアドレス、生年月日（具体的日付）、クレジットカード/銀行口座/マイナンバー等の識別番号、ログイン ID、正確な位置情報、その他一意に個人を特定し得る情報。）検出時 true
+
+内部制御:
+
+- OpenAI Responses API + JSON Schema 強制
+- JSON パース失敗/スキーマ逸脱 → 502
+- 空応答 / リトライ枯渇 → 503
+
+PII 判定方針（プロンプト内定義抜粋）:
+
+- 個人情報らしき入力が含まれる場合: flag=true, 内容の再掲は避け注意喚起文を末尾付与
+
+---
 
 ## /trivia
 
-Request (JSON):
+Request:
 
 ```json
 {
@@ -50,47 +71,64 @@ Request (JSON):
 
 Validation:
 
-- latitude: 数値文字列, -90 ～ 90
-- longitude: 数値文字列, -180 ～ 180
-- direction: 1 ～ 20 文字
-- location: "ベランダ" / "庭"
-  処理フロー:
+- latitude: 数値文字列 / -90〜90
+- longitude: 数値文字列 / -180〜180
+- direction: 1〜20 文字
+- location: "ベランダ" or "庭"
 
-1. 緯度経度 → 都市 / 天気 (web_search_preview, JSON Schema 指定, タイムアウト)
-2. 月 (サーバローカル) 取得
-3. 上記情報を instructions + payload に埋め込み生成
-4. 20 文字以内でなければ最大 `TRIVIA_MAX_ATTEMPTS` リトライ（バックオフ 0.2s, 0.4s...）
-5. なお超過最終結果は切り詰め（ログ警告）
-   Response (JSON / Pydantic):
+処理フロー:
+
+1. 緯度経度 → 都市 / 当日天気 (web_search_preview, JSON Schema, タイムアウト)
+2. 月を取得（サーバローカル）
+3. 情報を instructions + payload に埋め込み生成
+4. 20 文字以内になるまで最大 `TRIVIA_MAX_ATTEMPTS` 回生成
+5. 未達なら先頭 20 文字へ切り詰め（WARN ログ）
+
+Response:
 
 ```json
-{ "response": "東京は○○だよ" }
+{ "response": "東京は◯◯だよ" }
 ```
 
-必ず 20 文字以内（切り詰め後を含む）。
+---
 
 ## エラーポリシー
 
-| ステータス | 意味                                            |
-| ---------- | ----------------------------------------------- |
-| 400 / 422  | バリデーション失敗（FastAPI 既定は 422）        |
-| 429        | 同時実行枠取得不可 (2 秒待ちタイムアウト)       |
-| 500        | 予期せぬ内部エラー / 上流失敗で最終的に応答無し |
+| ステータス | 意味                                                           |
+| ---------- | -------------------------------------------------------------- |
+| 400 / 422  | 入力バリデーション失敗                                         |
+| 429        | 同時実行枠取得不可（2 秒待機タイムアウト） / 外部 429 最終結果 |
+| 502        | AI 応答形式エラー（JSON 解析失敗 / 必須キー欠落 / 型不一致）   |
+| 503        | 外部サービス一時的混雑 / 応答空で利用不能                      |
+| 500        | 想定外例外（スタックはサーバログのみ）                         |
 
-タイムアウト / 一時的ネットワーク例外はリトライ（上限到達後は 500）。
+リトライ:
+
+- /chat: 429/5xx (一部) + タイムアウト → 再試行（回数: `CHAT_MAX_ATTEMPTS`）
+- /trivia: 文字数条件未達 or タイムアウト/例外 → 再試行（回数: `TRIVIA_MAX_ATTEMPTS`）
+
+---
 
 ## 同時実行と耐性
 
-- asyncio.Semaphore で `/chat` `/trivia` それぞれ並列制限
-- finally で必ず release（リーク防止）
-- OpenAI 呼び出し: 個別タイムアウト + 軽量リトライ
-- web_search_preview: 1 回のみ（生成ループ外）→ 失敗時は city/weather 空で続行
+| 項目            | /chat                        | /trivia                        |
+| --------------- | ---------------------------- | ------------------------------ |
+| セマフォ上限    | `CHAT_CONCURRENCY` (既定 15) | `TRIVIA_CONCURRENCY` (既定 10) |
+| 外部呼び出し TO | `CHAT_OPENAI_TIMEOUT`        | `TRIVIA_OPENAI_TIMEOUT`        |
+| リトライ回数    | `CHAT_MAX_ATTEMPTS`          | `TRIVIA_MAX_ATTEMPTS`          |
 
-## 文字数制約 (/trivia)
+finally 解放でリーク防止。
 
-- 20 文字以下判定はサーバ側で毎試行
-- 成功条件満たすまでリトライ
-- 最終的に超過ならログ警告し先頭 20 文字へ切り詰め
+---
+
+## 文字数制約
+
+| エンドポイント | 制約            | 実装方法                       |
+| -------------- | --------------- | ------------------------------ |
+| /chat          | 300 文字目安    | JSON Schema + サーバ最終トリム |
+| /trivia        | 20 文字以内必須 | 生成ループで検査 + 最終トリム  |
+
+---
 
 ## ディレクトリ構成
 
@@ -98,46 +136,52 @@ Validation:
 project_root/
 ├─ app/
 │  ├─ main.py
-│  ├─ models.py            # ChatRequest / ChatResponse / TriviaRequest / TriviaResponse
+│  ├─ models.py
+│  ├─ prompts/
+│  │   └─ soylly.py
 │  ├─ routers/
-│  │  ├─ chat.py
-│  │  └─ trivia.py
+│  │   ├─ chat.py
+│  │   └─ trivia.py
 │  ├─ services/
-│  │  └─ openai_client.py
+│  │   └─ openai_client.py
 │  └─ templates/
-│     └─ index.html
-├─ web_search_test.py      # 天気取得テストスクリプト
+│      └─ index.html
 ├─ requirements.txt
 ├─ README.md
-└─ .env (開発のみ配置)
+└─ .env (開発用、Git管理除外推奨)
 ```
+
+---
 
 ## 環境変数
 
-| 変数                   | デフォルト | 用途                             |
-| ---------------------- | ---------- | -------------------------------- |
-| OPENAI_API_KEY         | (必須)     | OpenAI API キー                  |
-| CHAT_CONCURRENCY       | 10         | /chat 同時実行上限               |
-| TRIVIA_CONCURRENCY     | 10         | /trivia 同時実行上限             |
-| CHAT_OPENAI_TIMEOUT    | 8.0        | /chat 1 リクエストタイムアウト秒 |
-| TRIVIA_OPENAI_TIMEOUT  | 8.0        | /trivia 生成 1 回タイムアウト    |
-| TRIVIA_WEATHER_TIMEOUT | 10.0       | 天気取得タイムアウト             |
-| CHAT_MAX_ATTEMPTS      | 2          | /chat リトライ上限               |
-| TRIVIA_MAX_ATTEMPTS    | 5          | 20 文字達成までの上限            |
+| 変数                   | 既定   | 用途                                    |
+| ---------------------- | ------ | --------------------------------------- |
+| OPENAI_API_KEY         | (必須) | OpenAI API キー                         |
+| CHAT_CONCURRENCY       | 15     | /chat 同時実行上限                      |
+| TRIVIA_CONCURRENCY     | 10     | /trivia 同時実行上限                    |
+| CHAT_OPENAI_TIMEOUT    | 8.0    | /chat 外部 1 リクエストタイムアウト(秒) |
+| TRIVIA_OPENAI_TIMEOUT  | 8.0    | /trivia 各生成タイムアウト(秒)          |
+| TRIVIA_WEATHER_TIMEOUT | 10.0   | 天気取得タイムアウト(秒)                |
+| CHAT_MAX_ATTEMPTS      | 2      | /chat 再試行上限                        |
+| TRIVIA_MAX_ATTEMPTS    | 5      | /trivia 文字数達成までの上限            |
 
-## セットアップ
+---
+
+## セットアップ (開発)
 
 ```bash
-python3 -m venv venv
-source venv/bin/activate
+python3 -m venv .venv
+source .venv/bin/activate
 pip install -r requirements.txt
-cat > .env <<'EOF'
-OPENAI_API_KEY="sk-xxxxxxxxxxxxxxxxxxxxxxxx"
-EOF
-uvicorn app.main:app --reload
+cp .env.sample .env  # なければ手動作成
+# .env に OPENAI_API_KEY=sk-xxxx を記載
+uvicorn app.main:app --reload --reload-exclude '.venv/*'
 ```
 
 アクセス: http://127.0.0.1:8000/ /docs
+
+---
 
 ## 動作確認例
 
@@ -151,35 +195,51 @@ curl -s -X POST http://127.0.0.1:8000/trivia \
   -d '{"latitude":"35.6895","longitude":"139.6917","direction":"南向き","location":"ベランダ"}'
 ```
 
-## 今後の拡張候補
+---
 
-### ファインチューニング (SFT: Supervised Fine-Tuning) 計画
+## マージ時（クライアント統合）のポイント
 
-目的
+1. CORS
+   - 現在は allow_origins=["*"]。本番統合時はフロントドメインへ限定推奨。
+2. レート制御 / 429 表示
+   - フロント側で 429 / 503 をユーザー向け再試行ガイダンス文にマッピングする UI を用意。
+3. モデル切替余地
+   - 現状モデル名ハードコード (gpt-4o-mini)。将来差し替え時は環境変数化を提案。
+4. タイムアウト調整
+   - 観測: 体感遅延が多い場合 `CHAT_OPENAI_TIMEOUT` を 8→10 へ増やすより、まず `CHAT_CONCURRENCY` 過大設定を見直す。
 
-- ソイリィ固有表現（口調 / 20 文字内要約適合 / ドメイン知識）を向上
-- 応答の一貫性と PII (個人情報) フィルタ性能の改善
+---
 
-データ要件
+## セキュリティ/運用最低限
 
-- JSONL 形式、最低 20 サンプル（推奨は数百以上で漸進）
-- 1 行 = 1 会話タスク
-- 各行フォーマット:
+| 項目             | 現状              | コメント                              |
+| ---------------- | ----------------- | ------------------------------------- |
+| API Key 露出防止 | .env              | リポジトリ未コミット徹底              |
+| 入力検証         | Pydantic          | 型/範囲 OK                            |
+| PII 制御         | プロンプト + flag | 高精度保証ではない (将来ルール追加可) |
+| ログ             | WARN/ERROR 中心   | 応答全量長期保存なし                  |
+| HTTPS            | インフラ層依存    | リバースプロキシ(Nginx/ALB 等) 推奨   |
 
-```
-{"messages":[
-  {"role":"user","context":"ユーザー質問テキスト"},
-  {"role":"assistant","content":"理想的な回答（ソイリィ口調・制約順守）"}
-]}
-```
+---
 
-注意: user 側は key を content ではなく context として管理（内部前処理で content に rename 可能）。一貫性確保のため社内スキーマで固定。
+## 今後の拡張候補（任意）
 
-JSONL サンプル (抜粋):
+- モデル名/URL の設定値化
+- ファインチューニング(SFT)
+
+---
+
+## ファインチューニング(SFT) 概要（参考）
+
+目的:
+
+- ユーザーからの回答評価で品質向上を目指しユーザーの満足度を高める。
+
+データ JSONL (例):
 
 ```
 {"messages":[{"role":"user","context":"プランターの土が固い 改善法は？"},{"role":"assistant","content":"腐葉土とパーライト混ぜてふかふかにしよう！"}]}
 {"messages":[{"role":"user","context":"夏レタスの徒長を抑えるには？"},{"role":"assistant","content":"早朝だけ直射、日中は遮光ネットで徒長抑制だよ"}]}
-{"messages":[{"role":"user","context":"ミニトマトの脇芽かき頻度？"},{"role":"assistant","content":"週1で主茎基部から5cm以内をこまめに摘むと養分集中だね"}]}
-...
 ```
+
+---
