@@ -134,3 +134,13 @@ def test_chat_whitespace_response_trim(client):
         r = client.post("/chat", json={"message": "trim?"})
     assert r.status_code == 200
     assert r.json()["response"] == "テスト応答です"
+
+
+def test_chat_all_timeouts_503(client, monkeypatch):
+    """全試行タイムアウト: 全ての OpenAI 呼び出しが asyncio.TimeoutError → 最終的に 503 を返すことを検証"""
+    from unittest.mock import patch
+    import asyncio
+
+    with patch("app.routers.chat.client.responses.create", side_effect=asyncio.TimeoutError):
+        r = client.post(CHAT_URL, json={"message": "timeout-all"})
+    assert r.status_code == 503
