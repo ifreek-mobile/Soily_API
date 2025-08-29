@@ -166,8 +166,6 @@ project_root/
 | TRIVIA_WEATHER_TIMEOUT | 10.0 | 天気取得タイムアウト (秒)           |
 | CHAT_MAX_ATTEMPTS      | 2    | /chat 最大再試行回数                |
 | TRIVIA_MAX_ATTEMPTS    | 5    | /trivia 最大再生成回数              |
-| E2E_PORT               | 8800 | e2e テスト用ポート                  |
-| E2E_EXTERNAL           | (無) | 1= 既存起動サーバ流用               |
 
 ---
 
@@ -201,7 +199,7 @@ curl -s -X POST http://127.0.0.1:8000/trivia \
 
 ## 今後の拡張 (予定)
 
-- ファインチューニング / chatの回答満足度向上
+- ファインチューニング / chat の回答満足度向上
 - 画像認識機能 / 栽培サポート、健康状態管理
 
 ---
