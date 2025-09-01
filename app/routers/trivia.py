@@ -34,6 +34,7 @@ WEATHER_SCHEMA = {
     "strict": True,
 }
 
+
 def _safe_json(text: str) -> dict:
     t = text.strip()
     # コードフェンス除去
@@ -51,6 +52,7 @@ def _safe_json(text: str) -> dict:
     except Exception:
         return {}
 
+
 @router.post(
     "/trivia",
     summary="野菜トリビア",
@@ -62,7 +64,8 @@ async def trivia(req: TriviaRequest = Body(..., description='{"latitude":"...", 
         try:
             await asyncio.wait_for(_TRIVIA_SEMAPHORE.acquire(), timeout=2.0)
         except asyncio.TimeoutError:
-            raise HTTPException(status_code=429, detail="混雑しています。しばらくしてからお試しください。")
+            raise HTTPException(
+                status_code=429, detail="混雑しています。しばらくしてからお試しください。")
 
         try:
             # 現在の月（ローカルタイム）をプロンプトに渡す
@@ -110,6 +113,7 @@ async def trivia(req: TriviaRequest = Body(..., description='{"latitude":"...", 
                 "緯度経度から場所を特定しその情報を加味して回答をすること。"
                 f"ユーザーは**{req.direction}**の**{req.location}**で野菜を栽培している情報も加味すること。"
                 "嘘の情報は含めないこと。"
+                "基本**すべて野菜の名前はカタカナ表記で統一してください。**、伝統野菜のみ、日本語（漢字など）で表記する場合は、カタカナ表記も併記してください。"
             )
 
             # モデルへ渡す補助情報（天気情報を追加）
@@ -137,11 +141,13 @@ async def trivia(req: TriviaRequest = Body(..., description='{"latitude":"...", 
                     )
                 except asyncio.TimeoutError:
                     # タイムアウトはWARNで記録し、次の試行へ（スロットリングや一時障害を想定）
-                    logger.warning("OpenAI 呼び出しがタイムアウト（attempt=%d）", attempt + 1)
+                    logger.warning(
+                        "OpenAI 呼び出しがタイムアウト（attempt=%d）", attempt + 1)
                     continue
                 except Exception as oe:
                     # 上流の一時的エラー（429/5xx/接続エラーなど）も次試行へ
-                    logger.warning("OpenAI 呼び出しで例外（attempt=%d）: %r", attempt + 1, oe)
+                    logger.warning(
+                        "OpenAI 呼び出しで例外（attempt=%d）: %r", attempt + 1, oe)
                     await asyncio.sleep(min(0.2 * (attempt + 1), 1.0))
                     continue
                 ai_text = (getattr(resp, "output_text", None) or "").strip()
@@ -152,7 +158,8 @@ async def trivia(req: TriviaRequest = Body(..., description='{"latitude":"...", 
 
             # ガード：応答が空なら 503（一時的利用不能）
             if not ai_text:
-                raise HTTPException(status_code=503, detail="外部サービスが混雑しています。時間をおいて再度お試しください。")
+                raise HTTPException(
+                    status_code=503, detail="外部サービスが混雑しています。時間をおいて再度お試しください。")
             # 最終ガード：まだ20文字超なら切り詰め（ログは先頭60文字のみ）
             if len(ai_text) > 20:
                 logger.warning("20文字制約未達のため切り詰め実施 head=%r", ai_text[:60])

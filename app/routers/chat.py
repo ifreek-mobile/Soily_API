@@ -6,6 +6,7 @@ import os
 from app.models import ChatRequest, ChatResponse
 from app.services.openai_client import client
 from app.prompts.soylly import SOYLY_PROMPT
+from app.prompts.katakana_examples import KATAKANA_VEGETABLE_EXAMPLES  # 追加
 
 router = APIRouter()
 logger = logging.getLogger("uvicorn.error")
@@ -38,13 +39,21 @@ async def chat(request: ChatRequest = Body(..., description="ユーザーから�
             ai_response = ""
             for attempt in range(CHAT_MAX_ATTEMPTS):
                 try:
-                    # 1回の OpenAI 呼び出しをタイムアウト監視
+                    # user_payload を導入
+                    user_payload = {
+                        "user_message": request.message,
+                        "constraints": [
+                            "野菜名は必ずカタカナ表記で統一する（入力がひらがな/漢字でも変換）",
+                            "JSONのみを返す（response, flag）"
+                        ],
+                        "examples": KATAKANA_VEGETABLE_EXAMPLES.strip()
+                    }
                     resp = await asyncio.wait_for(
                         client.responses.create(
                             model="gpt-4o-mini",
-                            instructions=SOYLY_PROMPT,  # 出力口調・形式の制御プロンプト
-                            input=request.message,       # ユーザー入力
-                            # 出力は ChatResponse スキーマを満たす JSON 文字列を期待
+                            instructions=SOYLY_PROMPT,
+                            # ここで JSON 文字列化した payload を入力に
+                            input=json.dumps(user_payload, ensure_ascii=False),
                             text={
                                 "format": {
                                     "type": "json_schema",
@@ -94,7 +103,6 @@ async def chat(request: ChatRequest = Body(..., description="ユーザーから�
                     getattr(resp, "output_text", None) or "").strip()
 
                 # JSON 解析 & 型検証（失敗で 502）
-                import json
                 try:
                     parsed = json.loads(ai_response)
                 except json.JSONDecodeError:
@@ -109,6 +117,7 @@ async def chat(request: ChatRequest = Body(..., description="ユーザーから�
                 if not isinstance(response_text, str) or not isinstance(flag_value, bool):
                     raise HTTPException(status_code=502, detail="AI応答の型エラー")
 
+                # 文字数制限
                 response_text = response_text.strip()
                 if len(response_text) > 300:
                     logger.warning("AI応答300文字超過のため切り詰め head=%r",
