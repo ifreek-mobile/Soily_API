@@ -16,11 +16,19 @@ logger = logging.getLogger("uvicorn.error")
 # - TRIVIA_CONCURRENCY: プロセス内の同時実行上限（asyncio.Semaphore）。全体の上限は「ワーカー数×この値」が目安。
 # - TRIVIA_OPENAI_TIMEOUT: OpenAI呼び出しの1回あたりタイムアウト秒。短すぎると失敗増、長すぎると滞留。
 # - TRIVIA_MAX_ATTEMPTS: 20文字制約に収まるまでの再生成回数。大きいほど成功率↑/レイテンシとコスト↑。
+# - TRIVIA_WEATHER_TIMEOUT: 天気取得（web_search_preview）のタイムアウト秒（既定 10.0）
+# - TRIVIA_FALLBACK_MODEL: プライマリモデル失敗時のフォールバックモデル（既定 gpt-4o）
+# - EXPOSE_OPENAI_REASON: エラー応答に原因(reason)を含めるか（既定 1 / 公開環境では 0 を推奨）
 CONCURRENCY_LIMIT = int(os.getenv("TRIVIA_CONCURRENCY", "10"))
 _TRIVIA_SEMAPHORE = asyncio.Semaphore(CONCURRENCY_LIMIT)
 OPENAI_TIMEOUT = float(os.getenv("TRIVIA_OPENAI_TIMEOUT", "8.0"))
 MAX_ATTEMPTS = int(os.getenv("TRIVIA_MAX_ATTEMPTS", "5"))
 WEATHER_TIMEOUT = float(os.getenv("TRIVIA_WEATHER_TIMEOUT", "10.0"))
+TRIVIA_FALLBACK_MODEL = os.getenv("TRIVIA_FALLBACK_MODEL", "gpt-4o")
+# 開発デフォルトは有効化。本番運用では 0 に設定して詳細を隠蔽することを推奨
+EXPOSE_OPENAI_REASON = os.getenv("EXPOSE_OPENAI_REASON", "1") == "1" # 本番ではEXPOSE_OPENAI_REASON = os.getenv("EXPOSE_OPENAI_REASON", "0") == "1"
+# 一時的障害とみなして再試行対象にするステータスコード
+RETRY_STATUS_CODES = {429, 500, 502, 503, 504}
 
 # web_search_preview で都市と天気をJSONとして取得するためのスキーマ
 WEATHER_SCHEMA = {
@@ -127,7 +135,8 @@ async def trivia(req: TriviaRequest = Body(..., description='{"latitude":"...", 
             }
             # 生成ループ：OpenAI呼び出しにタイムアウトを付け、20文字以下なら採用。
             # 超過時は軽いバックオフ(0.2, 0.4, ... 最大1.0秒)を挟み、最大 MAX_ATTEMPTS 回まで試行。
-            ai_text = ""
+            text_format = {"format": {"type": "text"}}
+            last_error_reason = ""
             for attempt in range(MAX_ATTEMPTS):
                 try:
                     resp = await asyncio.wait_for(
@@ -135,31 +144,98 @@ async def trivia(req: TriviaRequest = Body(..., description='{"latitude":"...", 
                             model="gpt-4o-mini",
                             instructions=instructions,
                             input=json.dumps(user_payload, ensure_ascii=False),
-                            text={"format": {"type": "text"}},
+                            text=text_format,
                         ),
                         timeout=OPENAI_TIMEOUT,
                     )
                 except asyncio.TimeoutError:
-                    # タイムアウトはWARNで記録し、次の試行へ（スロットリングや一時障害を想定）
-                    logger.warning(
-                        "OpenAI 呼び出しがタイムアウト（attempt=%d）", attempt + 1)
+                    last_error_reason = "timeout"
+                    logger.warning("trivia timeout attempt=%d", attempt + 1)
+                    await asyncio.sleep(min(0.25 * (attempt + 1), 1.0))
                     continue
-                except Exception as oe:
-                    # 上流の一時的エラー（429/5xx/接続エラーなど）も次試行へ
-                    logger.warning(
-                        "OpenAI 呼び出しで例外（attempt=%d）: %r", attempt + 1, oe)
-                    await asyncio.sleep(min(0.2 * (attempt + 1), 1.0))
-                    continue
+                except Exception as e:
+                    last_error_reason = type(e).__name__
+                    status = getattr(e, "status_code", None)
+                    if status is None:
+                        status = getattr(
+                            getattr(e, "response", None), "status_code", None)
+                    err_msg = str(e)
+                    if any(token in err_msg.lower() for token in ("api key", "unauthorized", "authentication")):
+                        logger.error("trivia OpenAI 認証エラー: %s", err_msg)
+                        raise HTTPException(
+                            status_code=401, detail="OpenAI APIキーが無効または読み込めていません。")
+                    fallback_resp = None
+                    if status in RETRY_STATUS_CODES and TRIVIA_FALLBACK_MODEL and TRIVIA_FALLBACK_MODEL != "gpt-4o-mini":
+                        logger.warning("trivia fallback を試行 model=%s status=%s attempt=%d",
+                                       TRIVIA_FALLBACK_MODEL, status, attempt + 1)
+                        try:
+                            fallback_resp = await asyncio.wait_for(
+                                client.responses.create(
+                                    model=TRIVIA_FALLBACK_MODEL,
+                                    instructions=instructions,
+                                    input=json.dumps(
+                                        user_payload, ensure_ascii=False),
+                                    text=text_format,
+                                ),
+                                timeout=OPENAI_TIMEOUT + 2.0,
+                            )
+                            resp = fallback_resp
+                            last_error_reason = f"fallback({TRIVIA_FALLBACK_MODEL})"
+                            logger.info(
+                                "trivia fallback 成功 model=%s attempt=%d", TRIVIA_FALLBACK_MODEL, attempt + 1)
+                        except Exception as fallback_error:
+                            last_error_reason = type(fallback_error).__name__
+                            status = getattr(
+                                fallback_error, "status_code", status)
+                            logger.warning(
+                                "trivia fallback 失敗: %r", fallback_error)
+                            if attempt + 1 < MAX_ATTEMPTS:
+                                await asyncio.sleep(min(0.25 * (attempt + 1), 1.0))
+                                continue
+                            if status == 429:
+                                raise HTTPException(
+                                    status_code=429, detail="リクエストが集中しています。少し待って再度お試しください。")
+                            detail = "外部サービスが混雑しています。時間をおいて再度お試しください。"
+                            if EXPOSE_OPENAI_REASON:
+                                detail += f" (reason={last_error_reason})"
+                            raise HTTPException(statusコード=503, detail=detail)
+                    if status in RETRY_STATUS_CODES and fallback_resp is None:
+                        if attempt + 1 < MAX_ATTEMPTS:
+                            logger.warning(
+                                "trivia retryable status=%s attempt=%d: %r", status, attempt + 1, e)
+                            await asyncio.sleep(min(0.25 * (attempt + 1), 1.0))
+                            continue
+                        if status == 429:
+                            raise HTTPException(
+                                status_code=429, detail="リクエストが集中しています。少し待って再度お試しください。")
+                        detail = "外部サービスが混雑しています。時間をおいて再度お試しください。"
+                        if EXPOSE_OPENAI_REASON:
+                            detail += f" (reason={last_error_reason or 'retry_exhausted'})"
+                        raise HTTPException(status_code=503, detail=detail)
+                    raise
                 ai_text = (getattr(resp, "output_text", None) or "").strip()
-                if ai_text and len(ai_text) <= 20:
+                if not ai_text:
+                    last_error_reason = last_error_reason or "empty_output"
+                    logger.warning("trivia empty output attempt=%d", attempt)
+                    if attempt + 1 < MAX_ATTEMPTS:
+                        await asyncio.sleep(min(0.2 * (attempt + 1), 1.0))
+                        continue
+                    raise HTTPException(
+                        status_code=503,
+                        detail=("外部サービスが混雑しています。時間をおいて再度お試しください。"
+                                + (f" (reason={last_error_reason})" if EXPOSE_OPENAI_REASON else "")),
+                    )
+                if len(ai_text) <= 20:
                     break
                 # 短いバックオフで外部APIの瞬間負荷を緩和
                 await asyncio.sleep(min(0.2 * (attempt + 1), 1.0))
 
             # ガード：応答が空なら 503（一時的利用不能）
             if not ai_text:
-                raise HTTPException(
-                    status_code=503, detail="外部サービスが混雑しています。時間をおいて再度お試しください。")
+                detail = "外部サービスが混雑しています。時間をおいて再度お試しください。"
+                if EXPOSE_OPENAI_REASON and last_error_reason:
+                    detail += f" (reason={last_error_reason})"
+                raise HTTPException(statusコード=503, detail=detail)
             # 最終ガード：まだ20文字超なら切り詰め（ログは先頭60文字のみ）
             if len(ai_text) > 20:
                 logger.warning("20文字制約未達のため切り詰め実施 head=%r", ai_text[:60])
@@ -172,5 +248,8 @@ async def trivia(req: TriviaRequest = Body(..., description='{"latitude":"...", 
     except HTTPException:
         raise
     except Exception as e:
-        logger.exception("Unexpected error in /trivia: %r", e)
-        raise HTTPException(status_code=500, detail="サーバーエラーが発生しました")
+        logger.exception("trivia fatal err=%r", e)
+        detail = "サーバーエラーが発生しました"
+        if EXPOSE_OPENAI_REASON:
+            detail += f" (reason={type(e).__name__})"
+        raise HTTPException(status_code=500, detail=detail)

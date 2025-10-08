@@ -166,6 +166,15 @@ project_root/
 | TRIVIA_WEATHER_TIMEOUT | 10.0 | 天気取得タイムアウト (秒)           |
 | CHAT_MAX_ATTEMPTS      | 2    | /chat 最大再試行回数                |
 | TRIVIA_MAX_ATTEMPTS    | 5    | /trivia 最大再生成回数              |
+| CHAT_FALLBACK_MODEL    | gpt-4o | /chat 用フォールバックモデル     |
+| TRIVIA_FALLBACK_MODEL  | gpt-4o | /trivia 用フォールバックモデル   |
+| EXPOSE_OPENAI_REASON   | 1 (本番0推奨) | エラー detail に内部理由を付与するか |
+
+#### エラー理由の表示制御
+
+- `EXPOSE_OPENAI_REASON=1`（既定）: 開発・検証時に 503 などの detail に `reason=timeout` のような原因を表示  
+- 公開環境では `EXPOSE_OPENAI_REASON=0` とし、内部情報をクライアントへ返さない構成を推奨
+- どちらの場合もログでは常に詳細が確認できます
 
 ---
 
