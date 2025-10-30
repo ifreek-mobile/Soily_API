@@ -3,7 +3,7 @@ import json
 import logging
 import asyncio
 import os
-from typing import Any, Dict, List  # noqa: F401
+from typing import Any, Dict  # noqa: F401
 from app.models import ChatRequest, ChatResponse, RealTimeChatRequest, RealTimeChatResponse
 from app.services.openai_client import client
 from app.services.tools import REALTIME_OPENAI_TOOLS
@@ -45,7 +45,6 @@ REALTIME_CHAT_FALLBACK_MODEL = os.getenv(
     "REALTIME_CHAT_FALLBACK_MODEL", "gpt-4o")
 REALTIME_EXPOSE_OPENAI_REASON = os.getenv(
     "REALTIME_EXPOSE_OPENAI_REASON", "1") == "1"
-REALTIME_WEATHER_TIMEOUT = float(os.getenv("REALTIME_WEATHER_TIMEOUT", "10.0"))
 
 
 @router.post("/chat", response_model=ChatResponse, summary="チャット応答", description="ユーザーからのメッセージを受け取り、AI（ソイリィ）が応答を返します。")
