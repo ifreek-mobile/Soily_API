@@ -17,14 +17,14 @@ v1.1
 
 ## エンドポイント一覧
 
-| メソッド | パス            | 説明                                             |
-| -------- | --------------- | ------------------------------------------------ |
-| POST     | /chat           | 一問一答チャット (JSON 構造出力)                 |
+| メソッド | パス            | 説明                                               |
+| -------- | --------------- | -------------------------------------------------- |
+| POST     | /chat           | 一問一答チャット (JSON 構造出力)                   |
 | POST     | /chat/real-time | リアルタイム向けチャット (天気質問時は Web Search) |
-| POST     | /trivia         | 栽培環境ミニ豆知識 (20 文字以内)                 |
-| GET      | /               | 開発用簡易フロント (存在すれば)                  |
-| GET      | /docs           | Swagger UI                                       |
-| GET      | /redoc          | ReDoc (有効な場合)                               |
+| POST     | /trivia         | 栽培環境ミニ豆知識 (20 文字以内)                   |
+| GET      | /               | 開発用簡易フロント (存在すれば)                    |
+| GET      | /docs           | Swagger UI                                         |
+| GET      | /redoc          | ReDoc (有効な場合)                                 |
 
 ---
 
@@ -127,12 +127,12 @@ v1.1
 
 ## 同時実行・タイムアウト
 
-| 項目             | /chat                        | /chat/real-time                | /trivia                        |
-| ---------------- | ---------------------------- | ------------------------------ | ------------------------------ |
+| 項目             | /chat                        | /chat/real-time                       | /trivia                        |
+| ---------------- | ---------------------------- | ------------------------------------- | ------------------------------ |
 | セマフォ上限     | `CHAT_CONCURRENCY` (既定 15) | `REALTIME_CHAT_CONCURRENCY` (既定 15) | `TRIVIA_CONCURRENCY` (既定 10) |
-| 外部呼び出し TO  | `CHAT_OPENAI_TIMEOUT`        | `REALTIME_CHAT_OPENAI_TIMEOUT` | `TRIVIA_OPENAI_TIMEOUT`        |
-| 天気取得 TO      | -                            | `REALTIME_WEATHER_TIMEOUT`     | `TRIVIA_WEATHER_TIMEOUT`       |
-| リトライ最大回数 | `CHAT_MAX_ATTEMPTS`          | `REALTIME_CHAT_MAX_ATTEMPTS`   | `TRIVIA_MAX_ATTEMPTS`          |
+| 外部呼び出し TO  | `CHAT_OPENAI_TIMEOUT`        | `REALTIME_CHAT_OPENAI_TIMEOUT`        | `TRIVIA_OPENAI_TIMEOUT`        |
+| 天気取得 TO      | -                            | -           | `TRIVIA_WEATHER_TIMEOUT`       |
+| リトライ最大回数 | `CHAT_MAX_ATTEMPTS`          | `REALTIME_CHAT_MAX_ATTEMPTS`          | `TRIVIA_MAX_ATTEMPTS`          |
 
 ---
 
@@ -173,28 +173,26 @@ project_root/
 
 ## 環境変数
 
-| 変数                       | 既定           | 用途                                        |
-| -------------------------- | -------------- | ------------------------------------------- |
-| OPENAI_API_KEY             | 必須           | OpenAI API キー                             |
-| CHAT_CONCURRENCY           | 15             | /chat 同時実行上限                          |
-| TRIVIA_CONCURRENCY         | 10             | /trivia 同時実行上限                        |
-| REALTIME_CHAT_CONCURRENCY  | 15             | /chat/real-time 同時実行上限                |
-| CHAT_OPENAI_TIMEOUT        | 8.0            | /chat 外部呼び出しタイムアウト (秒)         |
-| TRIVIA_OPENAI_TIMEOUT      | 8.0            | /trivia 生成タイムアウト (秒)               |
-| REALTIME_CHAT_OPENAI_TIMEOUT | 15.0         | /chat/real-time 外部呼び出しタイムアウト (秒) |
-| TRIVIA_WEATHER_TIMEOUT     | 10.0           | /trivia 天気取得タイムアウト (秒)           |
-| REALTIME_WEATHER_TIMEOUT   | 10.0           | /chat/real-time 向け Web Search 用補助タイムアウト |
-| CHAT_MAX_ATTEMPTS          | 2              | /chat 最大再試行回数                        |
-| REALTIME_CHAT_MAX_ATTEMPTS | 2              | /chat/real-time 最大再試行回数              |
-| TRIVIA_MAX_ATTEMPTS        | 5              | /trivia 最大再生成回数                      |
-| CHAT_FALLBACK_MODEL        | gpt-4o         | /chat 用フォールバックモデル                |
-| REALTIME_CHAT_FALLBACK_MODEL | gpt-4o       | /chat/real-time 用フォールバックモデル      |
-| TRIVIA_FALLBACK_MODEL      | gpt-4o         | /trivia 用フォールバックモデル              |
-| EXPOSE_OPENAI_REASON       | 1 (本番0推奨) | エラー detail に内部理由を付与するか        |
+| 変数                         | 既定            | 用途                                               |
+| ---------------------------- | --------------- | -------------------------------------------------- |
+| OPENAI_API_KEY               | 必須            | OpenAI API キー                                    |
+| CHAT_CONCURRENCY             | 15              | /chat 同時実行上限                                 |
+| TRIVIA_CONCURRENCY           | 10              | /trivia 同時実行上限                               |
+| REALTIME_CHAT_CONCURRENCY    | 15              | /chat/real-time 同時実行上限                       |
+| CHAT_OPENAI_TIMEOUT          | 8.0             | /chat 外部呼び出しタイムアウト (秒)                |
+| TRIVIA_OPENAI_TIMEOUT        | 8.0             | /trivia 生成タイムアウト (秒)                      |
+| TRIVIA_WEATHER_TIMEOUT       | 10.0            | /trivia 天気取得タイムアウト (秒)                  |
+| CHAT_MAX_ATTEMPTS            | 2               | /chat 最大再試行回数                               |
+| REALTIME_CHAT_MAX_ATTEMPTS   | 2               | /chat/real-time 最大再試行回数                     |
+| TRIVIA_MAX_ATTEMPTS          | 5               | /trivia 最大再生成回数                             |
+| CHAT_FALLBACK_MODEL          | gpt-4o          | /chat 用フォールバックモデル                       |
+| REALTIME_CHAT_FALLBACK_MODEL | gpt-4o          | /chat/real-time 用フォールバックモデル             |
+| TRIVIA_FALLBACK_MODEL        | gpt-4o          | /trivia 用フォールバックモデル                     |
+| EXPOSE_OPENAI_REASON         | 1 (本番 0 推奨) | エラー detail に内部理由を付与するか               |
 
 #### エラー理由の表示制御
 
-- `EXPOSE_OPENAI_REASON=1`（既定）: 開発・検証時に 503 などの detail に `reason=timeout` のような原因を表示  
+- `EXPOSE_OPENAI_REASON=1`（既定）: 開発・検証時に 503 などの detail に `reason=timeout` のような原因を表示
 - 公開環境では `EXPOSE_OPENAI_REASON=0` とし、内部情報をクライアントへ返さない構成を推奨
 - どちらの場合もログでは常に詳細が確認できます
 
