@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import Optional, Literal
 from pydantic import BaseModel, Field, StrictStr, field_validator
 
 
@@ -65,3 +65,35 @@ class TriviaRequest(BaseModel):
 # /trivia のレスポンス（現行どおり）
 class TriviaResponse(BaseModel):
     response: str = Field(..., description="トリビアの内容")
+
+
+# /chat/real-time のリクエスト
+class RealTimeChatRequest(BaseModel):
+    username: StrictStr = Field(..., min_length=1, max_length=30, description="ユーザー名（必須、1〜30文字。日本語・英語可）")
+    message: StrictStr = Field(..., min_length=1, max_length=1000, description="質問メッセージ（必須、1〜1000文字）")
+    latitude: Optional[str] = Field(None, description="任意: 緯度")
+    longitude: Optional[str] = Field(None, description="任意: 経度")
+    direction: Optional[str] = Field(None, description="任意: 方角")
+    location: Optional[Literal["ベランダ", "庭"]] = Field(None, description="任意: ベランダ or 庭")
+
+    @field_validator("username")
+    @classmethod
+    def validate_username(cls, v: str) -> str:
+        s = v.strip()
+        if not (1 <= len(s) <= 30):
+            raise ValueError("username は1〜30文字で指定してください")
+        return s
+
+    @field_validator("message")
+    @classmethod
+    def validate_message(cls, v: str) -> str:
+        s = v.strip()
+        if not (1 <= len(s) <= 1000):
+            raise ValueError("message は1〜1000文字で指定してください")
+        return s
+
+
+# /chat/real-time のレスポンス
+class RealTimeChatResponse(ChatResponse):
+    """ /chat/real-time のレスポンス。ChatResponse と同形式。 """
+    pass

@@ -4,6 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pathlib import Path
 from app.routers.chat import router as chat_router
 from app.routers.trivia import router as trivia_router
+from app.routers import chat_realtime  # 1. 追加
 import os
 from dotenv import load_dotenv
 import logging
@@ -13,6 +14,7 @@ from contextlib import asynccontextmanager  # 追加
 load_dotenv()
 
 logger = logging.getLogger("uvicorn.error")  # 位置を前へ（lifespan 内で利用）
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -40,6 +42,8 @@ app.add_middleware(
 
 app.include_router(chat_router)
 app.include_router(trivia_router)
+app.include_router(chat_realtime.router)  # 新エンドポイント登録
+
 
 @app.get("/", summary="フロントページ")
 def serve_index():
