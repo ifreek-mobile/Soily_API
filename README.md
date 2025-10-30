@@ -127,10 +127,10 @@ v1.1
 
 ## 同時実行・タイムアウト
 
-| 項目             | /chat                        | /chat/real-time                       | /trivia                        |
-| ---------------- | ---------------------------- | ------------------------------------- | ------------------------------ |
-| セマフォ上限     | `CHAT_CONCURRENCY` (既定 15) | `REALTIME_CHAT_CONCURRENCY` (既定 15) | `TRIVIA_CONCURRENCY` (既定 10) |
-| 外部呼び出し TO  | `CHAT_OPENAI_TIMEOUT`        | `REALTIME_CHAT_OPENAI_TIMEOUT`        | `TRIVIA_OPENAI_TIMEOUT`        |
+| 項目             | /chat                            | /chat/real-time                       | /trivia                        |
+| ---------------- | -------------------------------- | ------------------------------------- | ------------------------------ |
+| セマフォ上限     | `CHAT_CONCURRENCY` (既定 30)     | `REALTIME_CHAT_CONCURRENCY` (既定 15) | `TRIVIA_CONCURRENCY` (既定 10) |
+| 外部呼び出し TO  | `CHAT_OPENAI_TIMEOUT` (既定 10s) | `REALTIME_CHAT_OPENAI_TIMEOUT` (既定 20s) | `TRIVIA_OPENAI_TIMEOUT`        |
 | 天気取得 TO      | -                            | -           | `TRIVIA_WEATHER_TIMEOUT`       |
 | リトライ最大回数 | `CHAT_MAX_ATTEMPTS`          | `REALTIME_CHAT_MAX_ATTEMPTS`          | `TRIVIA_MAX_ATTEMPTS`          |
 
@@ -176,10 +176,10 @@ project_root/
 | 変数                         | 既定            | 用途                                               |
 | ---------------------------- | --------------- | -------------------------------------------------- |
 | OPENAI_API_KEY               | 必須            | OpenAI API キー                                    |
-| CHAT_CONCURRENCY             | 15              | /chat 同時実行上限                                 |
+| CHAT_CONCURRENCY             | 30              | /chat 同時実行上限                                 |
 | TRIVIA_CONCURRENCY           | 10              | /trivia 同時実行上限                               |
 | REALTIME_CHAT_CONCURRENCY    | 15              | /chat/real-time 同時実行上限                       |
-| CHAT_OPENAI_TIMEOUT          | 8.0             | /chat 外部呼び出しタイムアウト (秒)                |
+| CHAT_OPENAI_TIMEOUT          | 10.0            | /chat 外部呼び出しタイムアウト (秒)                |
 | TRIVIA_OPENAI_TIMEOUT        | 8.0             | /trivia 生成タイムアウト (秒)                      |
 | TRIVIA_WEATHER_TIMEOUT       | 10.0            | /trivia 天気取得タイムアウト (秒)                  |
 | CHAT_MAX_ATTEMPTS            | 2               | /chat 最大再試行回数                               |
