@@ -3,7 +3,7 @@ import json
 import logging
 import asyncio
 import os
-from typing import Any, Dict  # noqa: F401
+from typing import Any, Dict
 from datetime import datetime, timezone, timedelta
 from app.models import RealTimeChatRequest, RealTimeChatResponse
 from app.services.openai_client import client
