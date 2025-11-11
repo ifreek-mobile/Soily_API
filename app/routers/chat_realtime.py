@@ -3,6 +3,7 @@ import json
 import logging
 import asyncio
 import os
+import re
 from typing import Any, Dict
 from datetime import datetime, timezone, timedelta
 from app.models import RealTimeChatRequest, RealTimeChatResponse
@@ -18,7 +19,10 @@ logger = logging.getLogger("uvicorn.error")
 # 再試行対象とする HTTP ステータスの集合
 RETRY_STATUS_CODES = {429, 500, 502, 503, 504}
 
-# リアルタイムチャット用
+# Web検索結果で返る Markdown 形式のリンクを検出するための正規表現
+_MARKDOWN_LINK_RE = re.compile(r"\[([^\]]+)\]\(https?://[^\)]+\)")
+
+# リアルタイムチャット用設定
 # - REALTIME_CHAT_CONCURRENCY: プロセス内で同時に処理する最大リクエスト数（既定 15）
 # - REALTIME_CHAT_OPENAI_TIMEOUT: OpenAI 呼び出し1回あたりのタイムアウト秒（既定 15.0）
 # - REALTIME_CHAT_MAX_ATTEMPTS: タイムアウト/空応答時の再試行回数（既定 2）
@@ -78,24 +82,22 @@ async def chat_real_time(request: RealTimeChatRequest = Body(..., description="�
                 weather_requested = _should_request_weather(request.message)
                 prefecture, city = await resolve_pref_city(request.latitude, request.longitude)
                 # --- デバック用リクエスト内容のログ記録 ---
-                # logger.info(
-                #     "chat_real_time request username=%s lat=%s lon=%s direction=%s location=%s weather_requested=%s prefecture=%s city=%s",
-                #     request.username,
-                #     request.latitude,
-                #     request.longitude,
-                #     request.direction,
-                #     request.location,
-                #     weather_requested,
-                #     prefecture,
-                #     city,
-                # )
+                logger.info(
+                    "chat_real_time request username=%s lat=%s lon=%s direction=%s location=%s weather_requested=%s prefecture=%s city=%s",
+                    request.username,
+                    request.latitude,
+                    request.longitude,
+                    request.direction,
+                    request.location,
+                    weather_requested,
+                    prefecture,
+                    city,
+                )
                 # --- モデルへ渡す入力ペイロード ---
                 user_payload = {
                     "username": request.username,
                     "user_message": request.message,
                     "context": {
-                        # "latitude": request.latitude,
-                        # "longitude": request.longitude,
                         "prefecture": prefecture,
                         "city": city,
                         "direction": request.direction,
@@ -105,11 +107,13 @@ async def chat_real_time(request: RealTimeChatRequest = Body(..., description="�
                     "weather_requested": weather_requested,
                     "constraints": [
                         "野菜名は必ずカタカナ表記で統一する（入力がひらがな/漢字でも変換）",
+                        "冒頭は「{username}さん、{挨拶一言}」の形式にする。挨拶は current_time の時間帯に合わせた語（おはようございます／こんにちは／こんばんは 等）と、短い一言を組み合わせる。",
                         "JSONのみを返す（response, flag）",
                         "weather_requested が true のときは web_search を活用し、最新の天気情報を回答に反映する",
                         "weather_requested が false のときは web search を使用せず通常回答を行う",
                         "current_time を基準に時間表現（今、◯時間後、明日など）を解釈し、矛盾のない回答を返す",
                         "絶対に具体的な住所の情報を出力しないこと",
+                        "回答内に URL や参照リンク（例: [名称](https://...)）を含めないこと",
                     ],
                     "examples": KATAKANA_VEGETABLE_EXAMPLES.strip(),
                 }
@@ -244,6 +248,19 @@ async def chat_real_time(request: RealTimeChatRequest = Body(..., description="�
                     raise HTTPException(status_code=502, detail="AI応答の型エラー")
 
                 response_text = response_text.strip()
+
+                # --- 応答冒頭に「ユーザー名＋さん」を必ず付与し、挨拶文そのものはモデル出力に任せる ---
+                greeting_prefix = f"{request.username}さん"
+                if response_text:
+                    if not response_text.startswith(greeting_prefix):
+                        # 既存テキストの冒頭に差し込む。句読点は重複しないよう調整
+                        response_text = f"{greeting_prefix}、{response_text}"
+                else:
+                    response_text = f"{greeting_prefix}、ご質問ありがとうございます。"
+
+                # --- Web検索結果による Markdown リンクを除去 ---
+                response_text = _MARKDOWN_LINK_RE.sub(r"\1", response_text)
+
                 if len(response_text) > 300:
                     # --- 300文字を超えた場合は切り捨て ---
                     logger.warning("AI応答300文字超過のため切り詰め head=%r",
