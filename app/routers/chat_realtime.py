@@ -96,19 +96,19 @@ async def chat_real_time(request: RealTimeChatRequest = Body(..., description="�
                     weather_requested = False
 
                 # --- デバック用リクエスト内容のログ記録 ---
-                logger.info(
-                    "chat_real_time request username=%s lat=%s lon=%s direction=%s location=%s weather_requested=%s prefecture=%s city=%s vegetable=%s quest_progress=%s",
-                    request.username,
-                    request.latitude,
-                    request.longitude,
-                    request.direction,
-                    request.location,
-                    weather_requested,
-                    prefecture,
-                    city,
-                    request.vegetable,
-                    request.quest_progress,
-                )
+                # logger.info(
+                #     "chat_real_time request username=%s lat=%s lon=%s direction=%s location=%s weather_requested=%s prefecture=%s city=%s vegetable=%s quest_progress=%s",
+                #     request.username,
+                #     request.latitude,
+                #     request.longitude,
+                #     request.direction,
+                #     request.location,
+                #     weather_requested,
+                #     prefecture,
+                #     city,
+                #     request.vegetable,
+                #     request.quest_progress,
+                # )
                 # --- モデルへ渡す入力ペイロード ---
                 user_payload = {
                     "username": request.username,
