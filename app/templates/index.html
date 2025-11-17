@@ -227,7 +227,7 @@
     // 起動方法に依存せずAPI URLを決定
     const isFile = window.location.protocol === 'file:';
     const API_BASE = isFile ? 'http://127.0.0.1:8000' : window.location.origin;
-    const CHAT_API_URL = API_BASE + '/chat';
+    const CHAT_API_URL = API_BASE + '/chat/real-time';
     const TRIVIA_API_URL = API_BASE + '/trivia';
     const DOCS_URL = API_BASE + '/docs';
 
@@ -289,13 +289,23 @@
         typingIndicator.style.display = 'flex';
 
         try {
-            console.log('[FETCH] POST', CHAT_API_URL, { message: messageText });
+            const payload = {
+                username: 'さかたい',
+                message: messageText,
+                latitude: 35.8617,
+                longitude: 139.6455,
+                direction: '南向き',
+                location: 'ベランダ',
+                vegetable: 'ハツカダイコン',
+                quest_progress: '種まき',
+            };
+            console.log('[FETCH] POST', CHAT_API_URL, payload);
             const response = await fetch(CHAT_API_URL, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
                 },
-                body: JSON.stringify({ message: messageText }),
+                body: JSON.stringify(payload),
             });
             console.log('[FETCH] status', response.status);
 

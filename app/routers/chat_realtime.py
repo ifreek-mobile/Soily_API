@@ -11,6 +11,7 @@ from app.services.openai_client import client
 from app.services.tools import REALTIME_OPENAI_TOOLS
 from app.prompts.soylly import SOYLY_PROMPT
 from app.prompts.katakana_examples import KATAKANA_VEGETABLE_EXAMPLES
+from app.prompts.Output_limit import OUTPUT_LIMIT_EXAMPLES
 from app.services.geocode import resolve_pref_city
 
 router = APIRouter()
@@ -65,7 +66,7 @@ async def chat_real_time(request: RealTimeChatRequest = Body(..., description="�
                         "additionalProperties": False,
                         "required": ["response", "flag"],
                         "properties": {
-                            "response": {"type": "string", "maxLength": 300, "description": "AIの応答"},
+                            "response": {"type": "string", "maxLength": 1000, "description": "AIの応答"},
                             "flag": {"type": "boolean", "description": "個人情報が含まれているかどうか"}
                         }
                     }
@@ -80,10 +81,23 @@ async def chat_real_time(request: RealTimeChatRequest = Body(..., description="�
                 ).isoformat()
                 # --- 天気質問かどうかを判定し、位置情報を逆ジオコーディング ---
                 weather_requested = _should_request_weather(request.message)
-                prefecture, city = await resolve_pref_city(request.latitude, request.longitude)
+                latitude_str = f"{request.latitude}" if request.latitude is not None else None
+                longitude_str = f"{request.longitude}" if request.longitude is not None else None
+                prefecture, city = await resolve_pref_city(latitude_str, longitude_str)
+
+                # --- 地域が特定できない場合は天気リクエストを抑制 ---
+                has_coordinates = request.latitude is not None and request.longitude is not None
+                has_pref_city = bool(prefecture or city)
+                if weather_requested and not (has_coordinates and has_pref_city):
+                    logger.info(
+                        "天気リクエストを抑制（位置情報が不足しているため） username=%s",
+                        request.username,
+                    )
+                    weather_requested = False
+
                 # --- デバック用リクエスト内容のログ記録 ---
                 logger.info(
-                    "chat_real_time request username=%s lat=%s lon=%s direction=%s location=%s weather_requested=%s prefecture=%s city=%s",
+                    "chat_real_time request username=%s lat=%s lon=%s direction=%s location=%s weather_requested=%s prefecture=%s city=%s vegetable=%s quest_progress=%s",
                     request.username,
                     request.latitude,
                     request.longitude,
@@ -92,6 +106,8 @@ async def chat_real_time(request: RealTimeChatRequest = Body(..., description="�
                     weather_requested,
                     prefecture,
                     city,
+                    request.vegetable,
+                    request.quest_progress,
                 )
                 # --- モデルへ渡す入力ペイロード ---
                 user_payload = {
@@ -103,19 +119,25 @@ async def chat_real_time(request: RealTimeChatRequest = Body(..., description="�
                         "direction": request.direction,
                         "location": request.location,
                         "current_time": current_time_iso,
+                        "vegetable": request.vegetable,
+                        "quest_progress": request.quest_progress,
                     },
                     "weather_requested": weather_requested,
                     "constraints": [
                         "野菜名は必ずカタカナ表記で統一する（入力がひらがな/漢字でも変換）",
-                        "冒頭は「{username}さん、{挨拶一言}」の形式にする。挨拶は current_time の時間帯に合わせた語（おはようございます／こんにちは／こんばんは 等）と、短い一言を組み合わせる。",
+                        "冒頭は「{username}さん、{挨拶}、{寄り添い文章}」の形式にする。挨拶文章構成は「ユーザーの質問に対する助けになる言葉」を含めた構成にすること",
                         "JSONのみを返す（response, flag）",
                         "weather_requested が true のときは web_search を活用し、最新の天気情報を回答に反映する",
                         "weather_requested が false のときは web search を使用せず通常回答を行う",
                         "current_time を基準に時間表現（今、◯時間後、明日など）を解釈し、矛盾のない回答を返す",
                         "絶対に具体的な住所の情報を出力しないこと",
-                        "回答内に URL や参照リンク（例: [名称](https://...)）を含めないこと",
+                        "回答内に URL や参照リンク（例: (weather.com)/[名称](https://...)）を含めないこと",
+                        "「Markdownを使わず平文で」「郵便番号や番地を出さない」「天気情報時間帯別の出力は求められない限り不要とする」",
+                        "vegetable は現在育てている野菜名を表すが、質問が別の野菜に関する場合は無理にこの野菜を推さず、質問意図に沿った品種を話をすること",
+                        "quest_progress は家庭菜園の進捗を示す。対応する助言が求められたときのみ活用し、無関係な場面では言及しない",
                     ],
                     "examples": KATAKANA_VEGETABLE_EXAMPLES.strip(),
+                    "prohibited_responses": OUTPUT_LIMIT_EXAMPLES.strip(),
                 }
                 openai_kwargs: Dict[str, Any] = {
                     "model": "gpt-4o-mini",
@@ -261,11 +283,11 @@ async def chat_real_time(request: RealTimeChatRequest = Body(..., description="�
                 # --- Web検索結果による Markdown リンクを除去 ---
                 response_text = _MARKDOWN_LINK_RE.sub(r"\1", response_text)
 
-                if len(response_text) > 300:
-                    # --- 300文字を超えた場合は切り捨て ---
-                    logger.warning("AI応答300文字超過のため切り詰め head=%r",
+                if len(response_text) > 1000:
+                    # --- 1000文字を超えた場合は切り捨て ---
+                    logger.warning("AI応答1000文字超過のため切り詰め head=%r",
                                    response_text[:60])
-                    response_text = response_text[:300]
+                    response_text = response_text[:1000]
 
                 return RealTimeChatResponse(response=response_text, flag=flag_value)
 
