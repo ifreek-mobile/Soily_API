@@ -39,6 +39,12 @@ REALTIME_CHAT_FALLBACK_MODEL = os.getenv(
 REALTIME_EXPOSE_OPENAI_REASON = os.getenv(
     "REALTIME_EXPOSE_OPENAI_REASON", "1") == "1"
 
+MODEL_PRICING_USD = {
+    "gpt-4o-mini": {"input": 0.00015, "output": 0.00060},
+    "gpt-4o": {"input": 0.00500, "output": 0.01500},
+}
+USD_TO_JPY = 150.0
+
 
 @router.post(
     "/chat/real-time",
@@ -95,7 +101,7 @@ async def chat_real_time(request: RealTimeChatRequest = Body(..., description="�
                     )
                     weather_requested = False
 
-                # --- デバック用リクエスト内容のログ記録 ---
+                #! --- デバック用リクエスト内容のログ記録 ---
                 # logger.info(
                 #     "chat_real_time request username=%s lat=%s lon=%s direction=%s location=%s weather_requested=%s prefecture=%s city=%s vegetable=%s quest_progress=%s",
                 #     request.username,
@@ -110,6 +116,15 @@ async def chat_real_time(request: RealTimeChatRequest = Body(..., description="�
                 #     request.quest_progress,
                 # )
                 # --- モデルへ渡す入力ペイロード ---
+                greeting_samples = [
+                    "今日も一緒に頑張ろうね！",
+                    "最近の栽培の調子はどうかな？",
+                    "一日の終わりにお疲れさま！",
+                    "調子はどうかな？今日も少しずつ進めようね！",
+                    "質問ありがとう！君の家庭菜園をサポートできて嬉しいよ！",
+                    "素晴らしい質問だね！一緒に解決策を考えよう！",
+                ]
+
                 user_payload = {
                     "username": request.username,
                     "user_message": request.message,
@@ -124,8 +139,9 @@ async def chat_real_time(request: RealTimeChatRequest = Body(..., description="�
                     },
                     "weather_requested": weather_requested,
                     "constraints": [
-                        "野菜名は必ずカタカナ表記で統一する（入力がひらがな/漢字でも変換）",
                         "冒頭は「{username}さん、{挨拶}、{寄り添い文章}」の形式にする。挨拶文章構成は「ユーザーの質問に対する助けになる言葉」を含めた構成にすること",
+                        "「寄り添い文章」は greeting_samples から時間帯や文脈に最適なものを選びぶこと",
+                        "野菜名は必ずカタカナ表記で統一する（入力がひらがな/漢字でも変換）",
                         "JSONのみを返す（response, flag）",
                         "weather_requested が true のときは web_search を活用し、最新の天気情報を回答に反映する",
                         "weather_requested が false のときは web search を使用せず通常回答を行う",
@@ -138,6 +154,7 @@ async def chat_real_time(request: RealTimeChatRequest = Body(..., description="�
                     ],
                     "examples": KATAKANA_VEGETABLE_EXAMPLES.strip(),
                     "prohibited_responses": OUTPUT_LIMIT_EXAMPLES.strip(),
+                    "greeting_samples": greeting_samples,
                 }
                 openai_kwargs: Dict[str, Any] = {
                     "model": "gpt-4o-mini",
@@ -145,6 +162,7 @@ async def chat_real_time(request: RealTimeChatRequest = Body(..., description="�
                     "input": json.dumps(user_payload, ensure_ascii=False),
                     "text": response_format,
                 }
+                model_used = openai_kwargs["model"]
                 if weather_requested:
                     # --- 天気系質問の場合のみ web_search ツールを付与 ---
                     openai_kwargs["tools"] = REALTIME_OPENAI_TOOLS
@@ -159,6 +177,11 @@ async def chat_real_time(request: RealTimeChatRequest = Body(..., description="�
                         client.responses.create(**openai_kwargs),
                         timeout=REALTIME_CHAT_OPENAI_TIMEOUT,
                     )
+                    #! --- デバッグ用（使用トークン数ログ）---
+                    # usage = getattr(resp, "usage", None)
+                    # if usage:
+                    #     usage_dict = usage if isinstance(usage, dict) else getattr(usage, "__dict__", {})
+                    #     _log_usage_cost(model_used, usage_dict)
                 except asyncio.TimeoutError:
                     # --- タイムアウト時はログ記録の上で必要ならリトライ ---
                     last_error_reason = "timeout"
@@ -202,9 +225,15 @@ async def chat_real_time(request: RealTimeChatRequest = Body(..., description="�
                                 timeout=REALTIME_CHAT_OPENAI_TIMEOUT + 2.0,
                             )
                             resp = fallback_resp
+                            model_used = REALTIME_CHAT_FALLBACK_MODEL
                             last_error_reason = f"fallback({REALTIME_CHAT_FALLBACK_MODEL})"
                             logger.info(
                                 "/chat/real-time fallback 成功 model=%s attempt=%d", REALTIME_CHAT_FALLBACK_MODEL, attempt + 1)
+                            #! --- デバッグ用（使用トークン数ログ）---
+                            # usage = getattr(resp, "usage", None)
+                            # if usage:
+                            #     usage_dict = usage if isinstance(usage, dict) else getattr(usage, "__dict__", {})
+                            #     _log_usage_cost(model_used, usage_dict)
                         except Exception as fallback_error:
                             # --- フォールバック失敗時のログとリトライ制御 ---
                             last_error_reason = type(fallback_error).__name__
@@ -336,3 +365,26 @@ def _safe_parse_json_response(raw: str) -> Dict[str, Any]:
             except json.JSONDecodeError:
                 logger.warning("AI応答JSON切り出し後も不正 raw=%r", trimmed[:120])
         raise exc
+
+
+#! --- デバッグ用: 使用トークン数ログのヘルパー ---
+# def _log_usage_cost(model: str, usage: Dict[str, Any]) -> None:
+#     input_tokens = usage.get("input_tokens")
+#     output_tokens = usage.get("output_tokens")
+#     total_tokens = usage.get("total_tokens")
+#     pricing = MODEL_PRICING_USD.get(model)
+#     cost_jpy = None
+#     if pricing and input_tokens is not None and output_tokens is not None:
+#         cost_usd = (
+#             (input_tokens / 1000.0) * pricing["input"]
+#             + (output_tokens / 1000.0) * pricing["output"]
+#         )
+#         cost_jpy = cost_usd * USD_TO_JPY
+#     logger.info(
+#         "OpenAI usage model=%s input_tokens=%s output_tokens=%s total_tokens=%s cost_jpy=%s",
+#         model,
+#         input_tokens,
+#         output_tokens,
+#         total_tokens,
+#         f"{cost_jpy:.4f}" if cost_jpy is not None else "N/A",
+#     )
